@@ -1,0 +1,26 @@
+FROM apache/spark:3.5.6
+
+USER root
+
+COPY requirements.txt /tmp/requirements.txt
+
+RUN pip install --no-cache-dir \
+    -r /tmp/requirements.txt
+
+# S3A / MinIO
+RUN curl -L \
+    -o /opt/spark/jars/hadoop-aws-3.3.4.jar \
+    https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar
+
+RUN curl -L \
+    -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
+    https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
+
+# PostgreSQL JDBC
+RUN curl -L \
+    -o /opt/spark/jars/postgresql-42.7.3.jar \
+    https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.3/postgresql-42.7.3.jar
+
+WORKDIR /opt/spark-apps
+
+USER spark

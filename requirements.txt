@@ -3,3 +3,4 @@ ipykernel
 numpy
 pyarrow
 fastparquet
+pyspark==3.5.6
