@@ -72,7 +72,7 @@ def load_from_bucket():
     )
 
     df = spark.read.parquet(
-        "s3a://lakehouse/bronze/yellow/2026-01.parquet"
+        "s3a://lakehouse/bronze/yellow/2026-01"
     )
 
     return df, spark
@@ -91,8 +91,8 @@ def save_to_db(df):
         .format("jdbc")
         .option("url", "jdbc:postgresql://postgres:5432/warehouse")
         .option("dbtable", "yellow_trips")
-        .option("user", "postgres")
-        .option("password", "postgres")
+        .option("user", POSTGRES_USER)
+        .option("password", POSTGRES_PASSWORD)
         .option("driver", "org.postgresql.Driver")
         .mode("overwrite")
         .save()

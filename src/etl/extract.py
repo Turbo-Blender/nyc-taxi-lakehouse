@@ -23,7 +23,7 @@ def extract_and_save():
         )
 
         df.write.mode("overwrite").parquet(
-        "s3a://lakehouse/raw/yellow/2026-01.parquet"
+        "s3a://lakehouse/raw/yellow/2026-01"
         )
     except Exception as e:
 

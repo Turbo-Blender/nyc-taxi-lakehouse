@@ -48,7 +48,7 @@ def load_from_bucket():
     )
 
     df = spark.read.parquet(
-        "s3a://lakehouse/raw/yellow/2026-01.parquet"
+        "s3a://lakehouse/raw/yellow/2026-01"
     )
 
     return df, spark
@@ -151,7 +151,7 @@ def save_processed_data(df):
     df.write \
         .mode("overwrite") \
         .parquet(
-            "s3a://lakehouse/bronze/yellow/2026-01.parquet"
+            "s3a://lakehouse/bronze/yellow/2026-01"
         )
 
 
