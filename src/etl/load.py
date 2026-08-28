@@ -79,21 +79,19 @@ def load_from_bucket():
 
 
 def save_to_db(df):
-
     jdbc_url = (
-        f"jdbc:postgresql://"
-        f"{POSTGRES_HOST}:{POSTGRES_PORT}/"
-        f"{POSTGRES_DB}"
+        f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
     )
 
     (
         df.write
         .format("jdbc")
-        .option("url", "jdbc:postgresql://postgres:5432/warehouse")
-        .option("dbtable", "yellow_trips")
+        .option("url", jdbc_url)
+        .option("dbtable", "raw.yellow_trips")
         .option("user", POSTGRES_USER)
         .option("password", POSTGRES_PASSWORD)
         .option("driver", "org.postgresql.Driver")
+        .option("truncate", "true")
         .mode("overwrite")
         .save()
     )
