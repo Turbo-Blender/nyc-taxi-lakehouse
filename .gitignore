@@ -225,3 +225,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Airflow runtime
+airflow/logs/**
+!airflow/logs/.gitkeep
+airflow/dags/__pycache__/
