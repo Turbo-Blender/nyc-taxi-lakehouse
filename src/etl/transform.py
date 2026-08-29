@@ -71,12 +71,7 @@ def transform_date(df):
             "pickup_month",
             F.month("tpep_pickup_datetime")
         )
-        .withColumn(
-            "pickup_day",
-            F.dayofmonth("tpep_pickup_datetime")
         )
-    )
-
     return df
 
 

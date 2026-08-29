@@ -6,7 +6,7 @@ from airflow.providers.common.sql.sensors.sql import SqlSensor
 from airflow.providers.standard.operators.bash import BashOperator
 
 SPARK_CONTAINER = "nyc-taxi-spark"
-SQL_DIR = "/opt/airflow/src/SQL/silver"
+SQL_DIR = "/opt/airflow/src/SQL"
 POSTGRES_CONN_ID = "postgres_default"
 
 default_args = {
@@ -32,6 +32,21 @@ with DAG(
         poke_interval=30,
         timeout=600,
         mode="reschedule",
+    )
+
+    prepare_taxi_zones_table = SQLExecuteQueryOperator(
+        task_id="prepare_taxi_zones_table",
+        conn_id=POSTGRES_CONN_ID,
+        sql="reference/01_create_taxi_zones.sql",
+        split_statements=True,
+    )
+
+    load_taxi_zones = BashOperator(
+        task_id="load_taxi_zones",
+        bash_command=(
+            f"docker exec {SPARK_CONTAINER} "
+            "python3 /app/src/etl/load_taxi_zones.py"
+        ),
     )
 
     create_raw_schema = SQLExecuteQueryOperator(
@@ -67,33 +82,35 @@ with DAG(
     silver_rename = SQLExecuteQueryOperator(
         task_id="silver_01_rename_columns",
         conn_id=POSTGRES_CONN_ID,
-        sql="01_rename_columns.sql",
+        sql="silver/01_rename_columns.sql",
         split_statements=True,
     )
 
     silver_clean = SQLExecuteQueryOperator(
         task_id="silver_02_clean_records",
         conn_id=POSTGRES_CONN_ID,
-        sql="02_clean_records.sql",
+        sql="silver/02_clean_records.sql",
         split_statements=True,
     )
 
     silver_dedup = SQLExecuteQueryOperator(
         task_id="silver_03_deduplicate",
         conn_id=POSTGRES_CONN_ID,
-        sql="03_deduplicate.sql",
+        sql="silver/03_deduplicate.sql",
         split_statements=True,
     )
 
     silver_derived = SQLExecuteQueryOperator(
         task_id="silver_04_derived_columns",
         conn_id=POSTGRES_CONN_ID,
-        sql="04_derived_columns.sql",
+        sql="silver/04_derived_columns.sql",
         split_statements=True,
     )
 
     (
         wait_for_postgres
+        >> prepare_taxi_zones_table
+        >> load_taxi_zones
         >> create_raw_schema
         >> spark_extract
         >> spark_transform
