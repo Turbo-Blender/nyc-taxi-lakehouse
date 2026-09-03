@@ -107,6 +107,55 @@ with DAG(
         split_statements=True,
     )
 
+    gold_schema_create = SQLExecuteQueryOperator(
+        task_id="gold_00_create_schema",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/00_create_gold_schema.sql",
+        split_statements=True,
+    )
+    
+    gold_dim_date = SQLExecuteQueryOperator(
+        task_id="gold_01_dim_date",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/dimensions/01_dim_date.sql",
+        split_statements=True,
+    )
+
+    gold_dim_taxi_zone = SQLExecuteQueryOperator(
+        task_id="gold_02_dim_taxi_zone",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/dimensions/02_dim_taxi_zone.sql",
+        split_statements=True,
+    )
+
+    gold_dim_vendor = SQLExecuteQueryOperator(
+        task_id="gold_03_dim_vendor",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/dimensions/03_dim_vendor.sql",
+        split_statements=True,
+    )
+
+    gold_dim_payment_type = SQLExecuteQueryOperator(
+        task_id="gold_04_dim_payment_type",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/dimensions/04_dim_payment_type.sql",
+        split_statements=True,
+    )
+
+    gold_dim_rate_code = SQLExecuteQueryOperator(
+        task_id="gold_05_dim_rate_code",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/dimensions/05_dim_rate_code.sql",
+        split_statements=True,
+    )
+
+    gold_fact_yellow_trips = SQLExecuteQueryOperator(
+        task_id="gold_06_fact_yellow_trips",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/facts/06_fact_yellow_trips.sql",
+        split_statements=True,
+    )
+    
     (
         wait_for_postgres
         >> prepare_taxi_zones_table
@@ -119,4 +168,7 @@ with DAG(
         >> silver_clean
         >> silver_dedup
         >> silver_derived
+        >> gold_schema_create
+        >> [gold_dim_date, gold_dim_taxi_zone, gold_dim_vendor, gold_dim_payment_type, gold_dim_rate_code]
+        >> gold_fact_yellow_trips
     )
