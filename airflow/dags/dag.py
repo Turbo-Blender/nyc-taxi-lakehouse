@@ -157,10 +157,10 @@ with DAG(
     )
     
     gold_zone_hourly_demand = SQLExecuteQueryOperator(
-    task_id="gold_07_zone_hourly_demand",
-    conn_id=POSTGRES_CONN_ID,
-    sql="gold/aggregates/07_zone_hourly_demand.sql",
-    split_statements=True,
+        task_id="gold_07_zone_hourly_demand",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/aggregates/07_zone_hourly_demand.sql",
+        split_statements=True,
     )
 
     gold_daily_kpis = SQLExecuteQueryOperator(
