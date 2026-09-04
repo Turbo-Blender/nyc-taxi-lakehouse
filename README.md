@@ -6,7 +6,7 @@
 
 Projekt pobiera dane przejazdów NYC Taxi, zapisuje je w lokalnym data lake opartym o MinIO, przetwarza w PySpark i udostępnia oczyszczoną warstwę Silver w PostgreSQL. Cały pipeline jest orkiestrwany przez Apache Airflow i uruchamiany lokalnie w Docker Compose.
 
-> **Status projektu:** pipeline Raw → Bronze → Silver działa end-to-end. Testy automatyczne, warstwa Gold oraz część Machine Learning są zaplanowane do implementacji w kolejnych etapach.
+> **Status projektu:** pipeline Raw → Bronze → Silver → Gold działa end-to-end. Testy automatyczne, obsługa wielu okresów oraz część Machine Learning są zaplanowane do implementacji w kolejnych etapach.
 
 [English version ↓](#english-version)
 
@@ -18,6 +18,7 @@ Projekt pobiera dane przejazdów NYC Taxi, zapisuje je w lokalnym data lake opar
 - [Architektura](#architektura)
 - [Przepływ danych](#przepływ-danych)
 - [Warstwy danych](#warstwy-danych)
+- [Model danych i transformacje](#model-danych-i-transformacje)
 - [Orkiestracja w Airflow](#orkiestracja-w-airflow)
 - [Stack technologiczny](#stack-technologiczny)
 - [Źródło danych](#źródło-danych)
@@ -29,26 +30,29 @@ Projekt pobiera dane przejazdów NYC Taxi, zapisuje je w lokalnym data lake opar
 
 ## Funkcje
 
-- **Konteneryzowane środowisko** – cały stack uruchamiany przez Docker Compose
-- **Orkiestracja ETL** – DAG Airflow wykonujący pipeline co 30 minut
-- **Lokalny data lake** – dane Raw i Bronze przechowywane w MinIO przez protokół S3A
-- **Przetwarzanie rozproszone** – odczyt, filtrowanie i flagi jakości danych w PySpark
-- **Warehouse w PostgreSQL** – załadunek danych przez JDBC do schematu `raw`
-- **Warstwa Silver** – widoki SQL realizujące zmianę nazw kolumn, czyszczenie, deduplikację i tworzenie cech analitycznych
-- **Eksploracja danych** – notebook Jupyter do analizy datasetu
-- **Trwałe wolumeny** – osobne wolumeny dla MinIO, warehouse PostgreSQL i metadanych Airflow
+- **Konteneryzowane środowisko** - cały stack uruchamiany przez Docker Compose
+- **Orkiestracja ETL** - DAG Airflow wykonujący pipeline co 30 minut
+- **Lokalny data lake** - dane Raw i Bronze przechowywane w MinIO przez protokół S3A
+- **Przetwarzanie rozproszone** - odczyt, filtrowanie i flagi jakości danych w PySpark
+- **Warehouse w PostgreSQL** - załadunek danych przez JDBC do schematu `raw`
+- **Warstwa Silver** - widoki SQL realizujące zmianę nazw, czyszczenie i deduplikację oraz finalna, materializowana tabela z cechami analitycznymi
+- **Dane referencyjne TLC** - mapowanie identyfikatorów lokalizacji na dzielnice i strefy taxi
+- **Star schema w Gold** - wymiary daty, strefy, dostawcy, płatności i taryfy połączone z tabelą faktów przejazdów
+- **Data marts** - godzinowy popyt według strefy oraz dzienne KPI
+- **Eksploracja danych** - notebook Jupyter do analizy datasetu
+- **Trwałe wolumeny** - osobne wolumeny dla MinIO, warehouse PostgreSQL i metadanych Airflow
 
 ## Zrzuty ekranu
 
 ### Działający DAG w Apache Airflow
 
-Pełne wykonanie pipeline'u Raw → Bronze → Silver zakończone sukcesem.
+Pełne wykonanie 20 zadań pipeline'u Raw → Bronze → Silver → Gold zakończone sukcesem.
 
 ![Widok działającego DAG-a w Airflow](./images/dag_view.png)
 
 ### Graf zależności zadań
 
-Sekwencyjny przepływ od sprawdzenia PostgreSQL, przez zadania Spark, do transformacji SQL warstwy Silver.
+Przepływ od sprawdzenia PostgreSQL, przez zadania Spark i Silver, do równolegle budowanych wymiarów oraz tabel faktów i agregatów Gold.
 
 ![Graf zadań DAG-a](./images/dag_chart.png)
 
@@ -66,11 +70,12 @@ Bucket `lakehouse` z katalogami `raw` i `bronze`.
 | Ingestion / Raw | ✅ Gotowe | Parquet → MinIO |
 | Transformacje / Bronze | ✅ Gotowe | filtr dat, kolumny daty, flagi jakości |
 | Load do PostgreSQL | ✅ Gotowe | zapis JDBC do `raw.yellow_trips` |
-| Warstwa Silver | ✅ Gotowe | rename, clean, deduplicate, derived columns |
+| Dane referencyjne | ✅ Gotowe | lookup stref TLC w `reference.taxi_zones` |
+| Warstwa Silver | ✅ Gotowe | rename, clean, deduplicate, materialized table |
+| Warstwa Gold | ✅ Gotowe | star schema, tabela faktów i dwa data marts |
 | Orkiestracja Airflow | ✅ Gotowe | działający DAG end-to-end |
 | Eksploracja danych | ✅ Gotowe | notebook Jupyter |
 | Testy automatyczne | 🗓️ Planowane | testy jednostkowe, integracyjne i jakości danych |
-| Warstwa Gold | 🗓️ Planowane | tabele agregacyjne i metryki biznesowe |
 | Machine Learning | 🗓️ Planowane | przygotowanie cech, trening i ewaluacja modelu |
 | Rozszerzenie danych | 🗓️ Planowane | kolejne miesiące i lata danych NYC Taxi |
 
@@ -84,13 +89,21 @@ flowchart LR
     SparkTransform --> BronzeLake[(MinIO Bronze)]
     BronzeLake --> SparkLoad[Spark JDBC Load]
     SparkLoad --> RawDB[(PostgreSQL Raw)]
-    RawDB --> Silver[PostgreSQL Silver Views]
-    Silver -. przyszłość .-> Gold[Gold Aggregations]
-    Gold -. przyszłość .-> ML[Machine Learning]
+    RawDB --> Silver[PostgreSQL Silver]
+    Zones[Taxi Zone Lookup CSV] --> Reference[(PostgreSQL Reference)]
+    Silver --> Dimensions[Gold Dimensions]
+    Reference --> Dimensions
+    Silver --> Fact[Gold Fact Trips]
+    Dimensions --> Fact
+    Fact --> Hourly[Zone Hourly Demand]
+    Fact --> Daily[Daily KPIs]
+    Fact -. przyszłość .-> ML[Machine Learning]
     Airflow[Apache Airflow] --> SparkExtract
     Airflow --> SparkTransform
     Airflow --> SparkLoad
     Airflow --> Silver
+    Airflow --> Dimensions
+    Airflow --> Fact
 ```
 
 | Komponent | Rola |
@@ -98,7 +111,7 @@ flowchart LR
 | **Apache Airflow** | Harmonogram, zależności i monitoring zadań pipeline'u |
 | **Apache Spark** | Ingestion, transformacje i zapis danych przez JDBC |
 | **MinIO** | Lokalny storage zgodny z S3 dla warstw Raw i Bronze |
-| **PostgreSQL** | Warehouse dla schematów Raw i Silver |
+| **PostgreSQL** | Warehouse dla schematów Reference, Raw, Silver i Gold |
 | **Redis** | Broker komunikatów dla CeleryExecutor |
 | **Jupyter** | Eksploracyjna analiza danych |
 
@@ -112,6 +125,8 @@ sequenceDiagram
     participant P as PostgreSQL
 
     A->>P: sprawdź dostępność bazy
+    A->>S: załaduj lookup stref taxi
+    S->>P: zapisz reference.taxi_zones
     A->>P: utwórz schemat raw
     A->>S: uruchom extract.py
     S->>M: zapisz Parquet w warstwie Raw
@@ -120,14 +135,17 @@ sequenceDiagram
     A->>S: uruchom load.py
     S->>P: załaduj raw.yellow_trips przez JDBC
     A->>P: wykonaj transformacje SQL Silver
+    A->>P: zbuduj dimensions i fact Gold
+    A->>P: oblicz godzinowy popyt i dzienne KPI
 ```
 
 1. Spark odczytuje lokalny plik Parquet z danymi Yellow Taxi.
 2. Dane źródłowe trafiają do `s3a://lakehouse/raw/yellow/2026-01`.
-3. Transformacja ogranicza dane do stycznia 2026, dodaje składowe daty oraz flagi jakości.
+3. Transformacja ogranicza dane do stycznia 2026, dodaje rok i miesiąc odbioru oraz flagi jakości.
 4. Wynik jest zapisywany w `s3a://lakehouse/bronze/yellow/2026-01`.
 5. Spark ładuje Bronze przez JDBC do `raw.yellow_trips` w PostgreSQL.
-6. Kolejne zadania SQL budują zależne widoki warstwy Silver.
+6. Kolejne zadania SQL budują widoki pośrednie i fizyczną tabelę warstwy Silver.
+7. Airflow równolegle ładuje pięć dimensions, następnie tabelę faktów i dwa data marts Gold.
 
 ## Warstwy danych
 
@@ -140,21 +158,83 @@ Niezmienione dane źródłowe zapisane w MinIO jako Parquet. Warstwa pozwala pon
 Dane po podstawowej transformacji w PySpark:
 
 - rekordy ograniczone do stycznia 2026,
-- `pickup_year`, `pickup_month`, `pickup_day`,
+- `pickup_year`, `pickup_month`,
 - flagi nulli, błędnych dystansów, wartości ujemnych i niepoprawnych dat.
 
 ### Silver
 
-Widoki PostgreSQL tworzone sekwencyjnie:
+Transformacje PostgreSQL wykonywane sekwencyjnie:
 
-1. `silver.yellow_trips_renamed` – ujednolicone nazwy kolumn,
-2. `silver.yellow_trips_cleaned` – odrzucenie niepoprawnych rekordów,
-3. `silver.yellow_trips_deduplicated` – deduplikacja z `ROW_NUMBER()`,
-4. `silver.yellow_trips` – czas przejazdu, średnia prędkość, procent napiwku i cechy czasowe.
+1. `silver.yellow_trips_renamed` - ujednolicone nazwy kolumn,
+2. `silver.yellow_trips_cleaned` - odrzucenie niepoprawnych rekordów,
+3. `silver.yellow_trips_deduplicated` - deduplikacja z `ROW_NUMBER()`,
+4. `silver.yellow_trips` - fizyczna tabela zawierająca czas przejazdu, średnią prędkość, procent napiwku i cechy czasowe.
 
-### Gold i Machine Learning
+### Gold
 
-Te elementy **nie są jeszcze zaimplementowane**. Planowana warstwa Gold będzie przechowywać agregaty gotowe do raportowania i modelowania, np. popyt według strefy i godziny, przychód, średnią długość przejazdu oraz trendy dzienne. Na jej podstawie powstanie część ML, przewidziana m.in. do predykcji popytu lub wartości przejazdu.
+Warstwa Gold jest zorganizowana jako star schema:
+
+- dimensions: `dim_date`, `dim_taxi_zone`, `dim_vendor`, `dim_payment_type`, `dim_rate_code`,
+- fact: `fact_yellow_trips` - jeden rekord na oczyszczony przejazd,
+- data marts: `zone_hourly_demand` i `daily_kpis`.
+
+Agregaty są gotowe do wykorzystania przez narzędzia BI oraz jako baza przyszłej warstwy cech ML. Kod treningu i inferencji modelu nie jest jeszcze zaimplementowany.
+
+## Model danych i transformacje
+
+### Reference
+
+`reference.taxi_zones` jest fizyczną tabelą słownikową ładowaną z oficjalnego pliku `taxi_zone_lookup.csv`. Jeden rekord opisuje jedną strefę TLC i zawiera `location_id`, dzielnicę (`borough`), nazwę strefy oraz typ strefy (`service_zone`). Tabela pozwala zamienić `PULocationID` i `DOLocationID` z danych przejazdów na czytelne lokalizacje.
+
+### Raw i Bronze
+
+Spark zapisuje źródłowy Parquet bez zmian w MinIO Raw. Podczas przejścia do Bronze:
+
+- dane są ograniczane do stycznia 2026,
+- dodawane są `pickup_year` i `pickup_month`,
+- powstają flagi jakości dla brakujących pasażerów, niepoprawnych dystansów, wartości ujemnych i błędnych dat.
+
+Bronze jest następnie ładowane przez JDBC do fizycznej tabeli `raw.yellow_trips`. Obecny pipeline wykonuje pełne odświeżenie tej tabeli.
+
+### Silver
+
+Silver zmienia dane krok po kroku:
+
+1. `yellow_trips_renamed` - widok zmienia nazwy techniczne TLC, np. `VendorID` na `vendor_id` oraz `PULocationID` na `pickup_location_id`.
+2. `yellow_trips_cleaned` - widok odrzuca przejazdy z czasem zakończenia wcześniejszym od rozpoczęcia, zerową liczbą pasażerów, niedodatnim dystansem lub ujemną kwotą całkowitą.
+3. `yellow_trips_deduplicated` - widok nadaje rekordom `ROW_NUMBER()` dla klucza biznesowego przejazdu i zachowuje pierwszy rekord.
+4. `yellow_trips` - fizyczna tabela materializuje wynik oraz dodaje `trip_duration_minutes`, `avg_speed_mph`, `tip_percentage`, `pickup_date`, `pickup_hour` i `pickup_day_of_week`.
+
+Finalna tabela Silver jest odświeżana przez `TRUNCATE + INSERT`. Widoki pośrednie pozostają logicznymi etapami transformacji i nie przechowują własnych kopii danych.
+
+### Gold dimensions
+
+- `dim_date` - jeden rekord na dzień; zawiera klucz `YYYYMMDD`, rok, kwartał, miesiąc, dzień tygodnia i informację o weekendzie.
+- `dim_taxi_zone` - jeden rekord na strefę TLC; powstaje z `reference.taxi_zones` i opisuje dzielnicę, strefę oraz `service_zone`.
+- `dim_vendor` - słownik dostawców rekordów taxi.
+- `dim_payment_type` - słownik sposobów płatności, np. karta, gotówka lub spór.
+- `dim_rate_code` - słownik taryf, np. standardowa, JFK lub Newark.
+
+Wymiary zachowują stabilne klucze i są ładowane przed tabelą faktów. Rekordy `Unknown` obsługują brakujące lub nierozpoznane wartości.
+
+### Gold fact
+
+`gold.fact_yellow_trips` ma ziarno **jednego oczyszczonego przejazdu**. Powstaje z `silver.yellow_trips` i zastępuje identyfikatory źródłowe kluczami do dimensions:
+
+- daty odbioru i zakończenia wskazują na `dim_date`,
+- lokalizacje pickup i dropoff wskazują na `dim_taxi_zone`,
+- vendor, sposób płatności i taryfa wskazują na odpowiednie słowniki,
+- miary obejmują m.in. liczbę pasażerów, dystans, czas, opłaty, napiwek, przychód oraz średnią prędkość.
+
+Tabela faktów jest odświeżana w trybie pełnym przez `TRUNCATE + INSERT`, a `trip_key` jest generowany ponownie przy każdym wykonaniu.
+
+### Gold data marts
+
+`gold.zone_hourly_demand` agreguje tabelę faktów do poziomu **strefa pickup + data + godzina**. Przechowuje liczbę przejazdów i pasażerów, przychód oraz średnią opłatę, odległość i czas przejazdu. Jest przygotowana pod analizę i prognozowanie popytu.
+
+`gold.daily_kpis` agreguje dane do poziomu **jednego dnia**. Zawiera liczbę przejazdów i pasażerów, całkowity przychód oraz średnie wartości opłaty, napiwku, dystansu, czasu i prędkości.
+
+Oba data marts są fizycznymi tabelami przebudowywanymi po załadowaniu `fact_yellow_trips`.
 
 ## Orkiestracja w Airflow
 
@@ -162,28 +242,32 @@ DAG `nyc_taxi_lakehouse` działa zgodnie z harmonogramem `*/30 * * * *`:
 
 ```text
 wait_for_postgres
-└── create_raw_schema
-    └── spark_extract
-        └── spark_transform
-            └── spark_load
-                └── silver_01_rename_columns
-                    └── silver_02_clean_records
-                        └── silver_03_deduplicate
-                            └── silver_04_derived_columns
+└── prepare_taxi_zones_table → load_taxi_zones
+    └── create_raw_schema → spark_extract → spark_transform → spark_load
+        └── silver_01 → silver_02 → silver_03 → silver_04
+            └── gold_00_create_schema
+                ├── gold_01_dim_date
+                ├── gold_02_dim_taxi_zone
+                ├── gold_03_dim_vendor
+                ├── gold_04_dim_payment_type
+                └── gold_05_dim_rate_code
+                    └── gold_06_fact_yellow_trips
+                        ├── gold_07_zone_hourly_demand
+                        └── gold_08_daily_kpis
 ```
 
-Zadania Spark są uruchamiane przez Airflow w kontenerze `nyc-taxi-spark`. Zadania Silver wykonują pliki SQL bezpośrednio w PostgreSQL.
+Zadania Spark są uruchamiane przez Airflow w kontenerze `nyc-taxi-spark`. Zadania Silver i Gold wykonują pliki SQL bezpośrednio w PostgreSQL. Dimensions Gold są budowane równolegle, a fact i agregaty czekają na ich zakończenie.
 
 ## Stack technologiczny
 
-- **Apache Airflow 3.3.1** – orkiestracja z CeleryExecutor
-- **Apache Spark / PySpark 3.5.6** – przetwarzanie danych
-- **MinIO** – lokalny object storage zgodny z S3
-- **PostgreSQL 16** – warehouse i baza metadanych Airflow
-- **Redis 7.2** – broker Celery
-- **Docker Compose** – lokalna orkiestracja usług
-- **Python, SQL, pandas, PyArrow** – ETL i analiza
-- **Jupyter Notebook** – eksploracja danych
+- **Apache Airflow 3.3.1** - orkiestracja z CeleryExecutor
+- **Apache Spark / PySpark 3.5.6** - przetwarzanie danych
+- **MinIO** - lokalny object storage zgodny z S3
+- **PostgreSQL 16** - warehouse i baza metadanych Airflow
+- **Redis 7.2** - broker Celery
+- **Docker Compose** - lokalna orkiestracja usług
+- **Python, SQL, pandas, PyArrow** - ETL i analiza
+- **Jupyter Notebook** - eksploracja danych
 
 ## Źródło danych
 
@@ -193,7 +277,7 @@ Projekt wykorzystuje dane **NYC Yellow Taxi Trip Records** publikowane przez NYC
 - oczekiwany plik: `data/raw/yellow/yellow_tripdata_2026-01.parquet`
 - dane obejmują m.in. czas odbioru i wysadzenia, strefy, dystans, sposób płatności, opłaty i napiwki
 
-Pliki danych nie są przechowywane w repozytorium – katalog `data/raw/` jest ignorowany przez Git.
+Pliki danych nie są przechowywane w repozytorium - katalog `data/raw/` jest ignorowany przez Git.
 
 Obecna wersja pipeline'u przetwarza wyłącznie dane Yellow Taxi ze stycznia 2026. W kolejnych etapach ingestion zostanie rozszerzony o wiele miesięcy i lat, wraz z parametryzacją zakresu dat oraz obsługą przyrostowego ładowania danych.
 
@@ -208,7 +292,8 @@ nyc-taxi-lakehouse/
 │   ├── logs/                   # Logi runtime, ignorowane przez Git
 │   └── plugins/
 ├── data/
-│   └── raw/yellow/             # Lokalny plik źródłowy Parquet
+│   ├── raw/yellow/             # Lokalny plik źródłowy Parquet
+│   └── nyc-zone-map/           # Lookup stref taxi TLC
 ├── docker/
 │   ├── Dockerfile              # Obraz Spark + S3A + JDBC
 │   └── Dockerfile.airflow      # Obraz Airflow + Docker CLI
@@ -219,12 +304,15 @@ nyc-taxi-lakehouse/
 │   ├── etl/
 │   │   ├── extract.py
 │   │   ├── transform.py
-│   │   └── load.py
-│   └── SQL/silver/
-│       ├── 01_rename_columns.sql
-│       ├── 02_clean_records.sql
-│       ├── 03_deduplicate.sql
-│       └── 04_derived_columns.sql
+│   │   ├── load.py
+│   │   └── load_taxi_zones.py
+│   └── SQL/
+│       ├── reference/
+│       ├── silver/
+│       └── gold/
+│           ├── dimensions/
+│           ├── facts/
+│           └── aggregates/
 ├── .env.example
 ├── docker-compose.yaml
 └── requirements.txt
@@ -323,6 +411,9 @@ Projekt nie ma jeszcze testów automatycznych. Aktualnie pipeline można zweryfi
 ```sql
 SELECT COUNT(*) FROM raw.yellow_trips;
 SELECT COUNT(*) FROM silver.yellow_trips;
+SELECT COUNT(*) FROM gold.fact_yellow_trips;
+SELECT SUM(trip_count) FROM gold.zone_hourly_demand;
+SELECT SUM(trip_count) FROM gold.daily_kpis;
 ```
 
 4. Zweryfikuj przykładowe cechy warstwy Silver:
@@ -344,6 +435,8 @@ LIMIT 10;
 - [x] Pipeline Raw → Bronze → PostgreSQL Raw → Silver
 - [x] Harmonogram i monitoring zadań w Airflow
 - [x] Czyszczenie, deduplikacja i cechy analityczne
+- [x] Star schema Gold z dimensions i tabelą faktów
+- [x] Agregaty godzinowego popytu i dziennych KPI
 - [ ] Testy jednostkowe transformacji PySpark
 - [ ] Testy integracyjne MinIO, PostgreSQL i DAG-a
 - [ ] Automatyczne testy jakości danych
@@ -351,7 +444,6 @@ LIMIT 10;
 - [ ] Parametryzacja pipeline'u dla różnych miesięcy i lat
 - [ ] Ingestion historycznych danych NYC Taxi
 - [ ] Przyrostowe ładowanie nowych okresów
-- [ ] Warstwa Gold z agregatami biznesowymi
 - [ ] Dashboard BI oparty o warstwę Gold
 - [ ] Feature engineering i pipeline Machine Learning
 - [ ] Trening, ewaluacja i wersjonowanie modelu
@@ -359,7 +451,7 @@ LIMIT 10;
 
 ## O projekcie
 
-NYC Taxi Lakehouse powstał jako praktyczny projekt data engineeringowy. Celem jest zbudowanie kompletnego, lokalnego środowiska odwzorowującego kolejne etapy nowoczesnego pipeline'u danych: object storage, przetwarzanie rozproszone, orkiestrację, warehouse, warstwy analityczne, testy jakości oraz – w dalszym etapie – Machine Learning.
+NYC Taxi Lakehouse powstał jako praktyczny projekt data engineeringowy. Celem jest zbudowanie kompletnego, lokalnego środowiska odwzorowującego kolejne etapy nowoczesnego pipeline'u danych: object storage, przetwarzanie rozproszone, orkiestrację, warehouse, warstwy analityczne, testy jakości oraz - w dalszym etapie - Machine Learning.
 
 ## Autor i kontakt
 
@@ -379,11 +471,11 @@ NYC Taxi Lakehouse powstał jako praktyczny projekt data engineeringowy. Celem j
 
 `Apache Airflow · PySpark · MinIO · PostgreSQL · Docker · SQL · Jupyter`
 
-The project ingests NYC Taxi Parquet data into an S3-compatible local data lake, transforms it with PySpark, loads it into PostgreSQL, and builds an analytics-ready Silver layer. Apache Airflow orchestrates the complete pipeline in Docker Compose.
+The project ingests NYC Taxi Parquet data into an S3-compatible local data lake, transforms it with PySpark, and builds analytics-ready Silver and Gold layers in PostgreSQL. Apache Airflow orchestrates the complete pipeline in Docker Compose.
 
 [Polska wersja ↑](#nyc-taxi-lakehouse)
 
-> **Project status:** the Raw → Bronze → Silver pipeline works end-to-end. Automated tests, a Gold layer, and Machine Learning are planned for future development.
+> **Project status:** the Raw → Bronze → Silver → Gold pipeline works end-to-end. Automated tests, multi-period ingestion, and Machine Learning are planned for future development.
 
 ## Implemented features
 
@@ -392,7 +484,10 @@ The project ingests NYC Taxi Parquet data into an S3-compatible local data lake,
 - Raw and Bronze Parquet storage in MinIO through S3A
 - PySpark date filtering, date components, and data-quality flags
 - JDBC load into `raw.yellow_trips`
-- Silver SQL views for renaming, cleaning, deduplication, and derived analytics columns
+- TLC taxi-zone reference data loaded into PostgreSQL
+- Silver SQL transformations with a materialized final table
+- Gold star schema with five dimensions and a trip fact table
+- Hourly zone-demand and daily KPI data marts
 - Jupyter notebook for exploratory data analysis
 
 ## Screenshots
@@ -419,23 +514,58 @@ flowchart LR
     SparkTransform --> BronzeLake[(MinIO Bronze)]
     BronzeLake --> SparkLoad[Spark JDBC Load]
     SparkLoad --> RawDB[(PostgreSQL Raw)]
-    RawDB --> Silver[PostgreSQL Silver Views]
-    Silver -. planned .-> Gold[Gold Aggregations]
-    Gold -. planned .-> ML[Machine Learning]
+    RawDB --> Silver[PostgreSQL Silver]
+    Zones[Taxi Zone Lookup CSV] --> Reference[(PostgreSQL Reference)]
+    Silver --> Dimensions[Gold Dimensions]
+    Reference --> Dimensions
+    Silver --> Fact[Gold Fact Trips]
+    Dimensions --> Fact
+    Fact --> Hourly[Zone Hourly Demand]
+    Fact --> Daily[Daily KPIs]
+    Fact -. planned .-> ML[Machine Learning]
     Airflow[Apache Airflow] --> SparkExtract
     Airflow --> SparkTransform
     Airflow --> SparkLoad
     Airflow --> Silver
+    Airflow --> Dimensions
+    Airflow --> Fact
 ```
 
 ## Data layers
 
-- **Raw** – unchanged source Parquet stored in MinIO
-- **Bronze** – January 2026 records enriched with date components and quality flags
-- **PostgreSQL Raw** – Bronze data loaded through Spark JDBC
-- **Silver** – cleaned, deduplicated data with duration, speed, tip, and time features
-- **Gold** – planned business aggregates for reporting and modeling
-- **Machine Learning** – planned feature, training, and evaluation pipeline
+- **Raw** - unchanged source Parquet stored in MinIO
+- **Bronze** - January 2026 records enriched with date components and quality flags
+- **PostgreSQL Raw** - Bronze data loaded through Spark JDBC
+- **Silver** - cleaned, deduplicated, physically stored data with duration, speed, tip, and time features
+- **Gold** - five dimensions, `fact_yellow_trips`, hourly zone demand, and daily KPIs
+- **Machine Learning** - planned feature, training, and evaluation pipeline
+
+## Data model and transformations
+
+### Reference, Raw, and Bronze
+
+`reference.taxi_zones` is a physical lookup table loaded from the official TLC CSV. It maps pickup and dropoff location IDs to boroughs, zone names, and service zones.
+
+Spark stores the unchanged source Parquet in MinIO Raw. Bronze filters the dataset to January 2026 and adds pickup year/month fields and data-quality flags. Spark then loads Bronze through JDBC into the physical `raw.yellow_trips` table using a full refresh.
+
+### Silver
+
+Silver applies four ordered transformations:
+
+1. `yellow_trips_renamed` standardizes TLC column names.
+2. `yellow_trips_cleaned` removes invalid dates, passengers, distances, and negative totals.
+3. `yellow_trips_deduplicated` uses `ROW_NUMBER()` to retain one row per trip business key.
+4. `yellow_trips` materializes the result and adds trip duration, average speed, tip percentage, and pickup time attributes.
+
+The first three objects are logical views. The final Silver object is a physical table refreshed with `TRUNCATE + INSERT`.
+
+### Gold star schema
+
+The dimensions describe dates, TLC taxi zones, vendors, payment types, and rate codes. They are loaded before the fact table and contain fallback records for missing or unmapped values.
+
+`gold.fact_yellow_trips` has a grain of **one cleaned trip**. It links pickup/dropoff dates and zones to their dimensions, links vendor/payment/rate codes to lookup dimensions, and stores measures such as passengers, distance, duration, fares, tips, revenue, and average speed.
+
+`gold.zone_hourly_demand` aggregates facts to **pickup zone + date + hour** for demand analysis and future forecasting. `gold.daily_kpis` aggregates facts to **one day** for operational reporting. Both data marts are physical tables rebuilt after the fact table.
 
 The current pipeline processes Yellow Taxi data for January 2026 only. Future development will extend ingestion across multiple months and years, parameterize date ranges, and introduce incremental loading for new periods.
 
@@ -484,7 +614,7 @@ MinIO Console is available at [http://localhost:9001](http://localhost:9001), an
 
 ## Current limitations and roadmap
 
-The operational pipeline is complete through the Silver layer, but the project does **not yet include automated tests, Gold models, or ML code**.
+The operational pipeline is complete through the Gold layer, but the project does **not yet include automated tests, multi-period ingestion, a BI dashboard, or ML code**.
 
 - [ ] Unit tests for PySpark transformations
 - [ ] Integration tests for MinIO, PostgreSQL, and Airflow
@@ -493,7 +623,6 @@ The operational pipeline is complete through the Silver layer, but the project d
 - [ ] Parameterized ingestion across multiple months and years
 - [ ] Historical NYC Taxi data backfill
 - [ ] Incremental loading of new periods
-- [ ] Gold business aggregates
 - [ ] BI dashboard
 - [ ] ML feature engineering, training, evaluation, and model versioning
 - [ ] CI/CD
