@@ -156,6 +156,20 @@ with DAG(
         split_statements=True,
     )
     
+    gold_zone_hourly_demand = SQLExecuteQueryOperator(
+    task_id="gold_07_zone_hourly_demand",
+    conn_id=POSTGRES_CONN_ID,
+    sql="gold/aggregates/07_zone_hourly_demand.sql",
+    split_statements=True,
+    )
+
+    gold_daily_kpis = SQLExecuteQueryOperator(
+        task_id="gold_08_daily_kpis",
+        conn_id=POSTGRES_CONN_ID,
+        sql="gold/aggregates/08_daily_kpis.sql",
+        split_statements=True,
+    )
+
     (
         wait_for_postgres
         >> prepare_taxi_zones_table
@@ -171,4 +185,5 @@ with DAG(
         >> gold_schema_create
         >> [gold_dim_date, gold_dim_taxi_zone, gold_dim_vendor, gold_dim_payment_type, gold_dim_rate_code]
         >> gold_fact_yellow_trips
+        >> [gold_zone_hourly_demand, gold_daily_kpis]
     )
