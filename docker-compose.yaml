@@ -45,7 +45,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: nyc-taxi-spark
+    container_name: mevo-bikes-spark
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
